@@ -31,7 +31,7 @@ def extract_frames(video_path, output_dir):
 
     cap.release() # Release the video capture object
     print(f"[INFO] Frames extracted and saved to {frame_dir}")
-    return frames 
+    return frames, frame_dir
 
 def extract_audio(video_path):
     # Define the output audio file path
@@ -41,7 +41,25 @@ def extract_audio(video_path):
     # Load the audio using librosa
     audio, sr = librosa.load(audio_path, sr=None)
     print(f"[INFO] Audio extracted and saved as {audio_path}")
-    return audio 
+    return audio, audio_path 
+
+def delete_files(file_paths):
+    # Delete files from the provided list
+    for file_path in file_paths:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"[INFO] Deleted file: {file_path}")
+
+def delete_directory(directory_path):
+    # Delete the directory and its contents
+    if os.path.exists(directory_path):
+        for root, dirs, files in os.walk(directory_path, topdown=False):
+            for file in files:
+                os.remove(os.path.join(root, file))
+            for dir in dirs:
+                os.rmdir(os.path.join(root, dir))
+        os.rmdir(directory_path)
+        print(f"[INFO] Deleted directory: {directory_path}")
 
 def calculate_sift_descriptors(frame_path):
     # Read the frame image
@@ -101,7 +119,7 @@ def video_retrieval_database_construction(videos_dir):
         video_id = i + 1 # Assign a unique ID to the video
 
         # Step 3: Extract frame images
-        frames = extract_frames(video_path, output_dir)
+        frames, frame_dir = extract_frames(video_path, output_dir)
 
         # Step 4-6: Process each frame
         for j, frame_path in enumerate(frames):
@@ -110,7 +128,7 @@ def video_retrieval_database_construction(videos_dir):
         print("[INFO] Hash sequences from SIFT features calculated")
 
         # Step 8: Extract audio
-        audio = extract_audio(video_path)
+        audio, audio_path = extract_audio(video_path)
 
         # Step 9-11: Short-term energy hash
         hash_ste = calculate_ste_hash(audio)
@@ -132,6 +150,9 @@ def video_retrieval_database_construction(videos_dir):
         else:
             print("[WARNING] Retrieval database contains empty entries. Check the input videos or feature extraction steps.")
 
+    delete_directory(frame_dir)
+    delete_files([audio_path])
+    
     # Step 21: Return the constructed retrieval database and carrier videos
     return retrieval_database, carrier_videos
 
