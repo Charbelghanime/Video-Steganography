@@ -4,6 +4,7 @@ import os  # For file and directory operations
 import numpy as np  # For numerical operations
 import pywt  # For computing Discrete Wavelet Transform (DWT)
 import librosa  # For audio processing and feature extraction
+import time # For timing the process
 
 # Utility functions
 def extract_frames(video_path, output_dir):
@@ -75,7 +76,6 @@ def calculate_sift_descriptors(frame_path):
         hash_sift = np.sum(descriptors) % 256  # Example hash computation from descriptors
     else:
         hash_sift = 0 # If no descriptors, set hash to 0
-    print("[INFO] Hash sequences from SIFT features calculated")
     return hash_sift 
 
 def calculate_ste_hash(audio_signal, frame_length=2048):
@@ -83,7 +83,6 @@ def calculate_ste_hash(audio_signal, frame_length=2048):
     energy = [np.sum(audio_signal[i:i + frame_length] ** 2) for i in range(0, len(audio_signal), frame_length)]
     # Generate a binary hash sequence based on energy values
     hash_ste = [1 if e > np.mean(energy) else 0 for e in energy]
-    print("[INFO] Hash sequences from short-term energy features calculated")
     return hash_ste 
 
 def calculate_dwt_hash(audio_signal):
@@ -95,7 +94,6 @@ def calculate_dwt_hash(audio_signal):
     combined_coeffs = np.concatenate((approximation, detail))
     # Generate hash based on the combined coefficients
     hash_dwt = [1 if x > np.mean(combined_coeffs) else 0 for x in combined_coeffs]
-    print("[INFO] Hash sequences from DWT coefficients calculated using PyWavelets")
     return hash_dwt
 
 def update_retrieval_database(R, video_id, feature_id, position_id, hash_sequence):
@@ -106,6 +104,8 @@ def update_retrieval_database(R, video_id, feature_id, position_id, hash_sequenc
     R[hash_sequence].append((video_id, feature_id, position_id))
 
 def video_retrieval_database_construction(videos_dir):
+    start_time = time.time() #Start Time
+
     retrieval_database = {} # Dictionary to store the retrieval database
     carrier_videos = [] # List to store processed carrier videos
 
@@ -121,24 +121,41 @@ def video_retrieval_database_construction(videos_dir):
         # Step 3: Extract frame images
         frames, frame_dir = extract_frames(video_path, output_dir)
 
-        # Step 4-6: Process each frame
+        # Time the process of hash generation based on SIFT 
+        sift_start_time = time.time()
+
+        # Step 4-6: Process each frame to generate SIFT hash
         for j, frame_path in enumerate(frames):
             hash_sift = calculate_sift_descriptors(frame_path)
             update_retrieval_database(retrieval_database, video_id, 'SIFT', j, hash_sift)
-        print("[INFO] Hash sequences from SIFT features calculated")
+        sift_end_time = time.time()
+        print("[INFO] Hash sequence generation from SIFT features is complete")
+        print(f"[INFO] SIFT hash sequence generation took {sift_end_time - sift_start_time:.2f} seconds")
 
         # Step 8: Extract audio
         audio, audio_path = extract_audio(video_path)
+
+        # Time the process of hash generation based on STE 
+        ste_start_time = time.time()
 
         # Step 9-11: Short-term energy hash
         hash_ste = calculate_ste_hash(audio)
         for j, h in enumerate(hash_ste):
             update_retrieval_database(retrieval_database, video_id, 'STE', j, h)
+        ste_end_time = time.time()
+        print("[INFO] Hash sequence generation from STE features is complete")
+        print(f"[INFO] STE hash sequence generation took {ste_end_time - ste_start_time:.2f} seconds")
+        
+        # Time the process of hash generation based on DWT coefficients
+        dwt_start_time = time.time()
 
         # Step 13-15: DWT hash
         hash_dwt = calculate_dwt_hash(audio)
         for j, h in enumerate(hash_dwt):
             update_retrieval_database(retrieval_database, video_id, 'DWT', j, h)
+        dwt_end_time = time.time()
+        print("[INFO] Hash sequence generation from DWT features is complete")
+        print(f"[INFO] DWT hash sequence generation took {dwt_end_time - dwt_start_time:.2f} seconds")
 
         # Step 17: Append to carrier videos
         carrier_videos.append(video_path)
@@ -150,6 +167,10 @@ def video_retrieval_database_construction(videos_dir):
         else:
             print("[WARNING] Retrieval database contains empty entries. Check the input videos or feature extraction steps.")
 
+    end_time = time.time()
+    total_duration = end_time - start_time
+    print(f"[INFO] Retrieval database construction completed in {total_duration:.2f} seconds")
+    
     delete_directory(frame_dir)
     delete_files([audio_path])
     
