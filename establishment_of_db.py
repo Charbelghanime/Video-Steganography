@@ -125,39 +125,145 @@ def check_database_integrity(db_path):
     conn.close()
     return null_count == 0
     
-def calculate_sift_descriptors(frame_path):
-    # Read the frame image
-    frame = cv2.imread(frame_path)
-    # Convert the frame to grayscale
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    # Create a SIFT object
+def generate_sift_hash(frame_path):
+    """
+    Generate SIFT-based hash for a frame based on the paper's implementation.
+    """
+    # Step 1: Process the frame image
+    frame = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)  # Convert to grayscale
+    resized_frame = cv2.resize(frame, (512, 512))  # Uniform size to 512x512
+    block_size = 512 // 3  # Divide into 3x3 blocks
+
+    # Step 2: Divide the frame into 3x3 blocks and count SIFT feature points
     sift = cv2.SIFT_create()
-    # Detect keypoints and compute descriptors
-    keypoints, descriptors = sift.detectAndCompute(gray_frame, None)
-    # Compute a hash value based on the descriptors
-    if descriptors is not None:
-        hash_sift = ''.join(format(int(np.sum(descriptors) % 256), '08b'))  # Convert to 8-bit binary string
-    else:
-        hash_sift = '00000000' # If no descriptors, set hash to 0
-    return hash_sift 
+    keypoints, _ = sift.detectAndCompute(resized_frame, None)
 
-def calculate_ste_hash(audio_signal, frame_length=2048):
-    # Compute energy for each frame of audio
-    energy = [np.sum(audio_signal[i:i + frame_length] ** 2) for i in range(0, len(audio_signal), frame_length)]
-    # Generate a binary hash sequence based on energy values
-    hash_ste = [format(int(e % 256), '08b') for e in energy]  
-    return hash_ste 
+    # Initialize a list to count SIFT points for each block
+    sift_counts = [0] * 9
 
-def calculate_dwt_hash(audio_signal):
-    # Perform DWT using PyWavelets and 'db1' wavelet
-    coeffs = pywt.dwt(audio_signal, 'db1')
-    # Coefficients from DWT are returned as a tuple: (approximation, detail)
-    approximation, detail = coeffs
-    # Combine the approximation and detail coefficients
-    combined_coeffs = np.concatenate((approximation, detail))
-    # Generate hash based on the combined coefficients
-    hash_dwt = [format(int(x % 256), '08b') for x in combined_coeffs]
-    return hash_dwt
+    for kp in keypoints:
+        x, y = int(kp.pt[0]), int(kp.pt[1])
+        block_x = x // block_size
+        block_y = y // block_size
+        block_index = block_y * 3 + block_x  # Map 2D block to 1D index
+        sift_counts[block_index] += 1
+
+    # Step 3: Generate the hash sequence based on comparisons
+    hash_sequence = []
+    for i in range(len(sift_counts) - 1):  # Compare adjacent blocks
+        if sift_counts[i] < sift_counts[i + 1]:
+            hash_sequence.append('1')
+        else:
+            hash_sequence.append('0')
+
+    # Ensure the hash sequence is exactly 8 bits
+    if len(hash_sequence) > 8:
+        hash_sequence = hash_sequence[:8]
+    elif len(hash_sequence) < 8:
+        hash_sequence += ['0'] * (8 - len(hash_sequence))  # Pad with zeros to 8 bits
+
+    # Convert hash sequence to a string
+    hash_sequence_str = ''.join(hash_sequence)
+
+    # Step 4: Generate the inverted hash sequence
+    inverted_sequence = ''.join('1' if bit == '0' else '0' for bit in hash_sequence_str)
+
+    # Return the sequences as a list of 8-bit entries
+    return [hash_sequence_str, inverted_sequence]
+
+
+def calculate_short_term_energy(audio_signal, frame_length=200, frame_shift=80):
+    # Divide the audio signal into frames and calculate short-term energy
+    num_frames = (len(audio_signal) - frame_length) // frame_shift + 1
+    energy_frames = []
+    for i in range(num_frames):
+        frame = audio_signal[i * frame_shift: i * frame_shift + frame_length]
+        energy = np.sum(frame ** 2)
+        energy_frames.append(energy)
+    return energy_frames
+
+def calculate_segmented_energy(energy_frames, L0=180):
+    if len(energy_frames) == 0:
+        raise ValueError("Energy frames are empty. Cannot calculate segmented energy.")
+    
+    h0 = len(energy_frames) // L0 if len(energy_frames) >= L0 else len(energy_frames)
+    if h0 < 8:
+        raise ValueError(f"Insufficient segments for hash generation. h0={h0}")
+    
+    segmented_energy = []
+    for i in range(0, len(energy_frames), h0):
+        segment = energy_frames[i:i + h0]
+        segmented_energy.append(np.sum(segment))
+    
+    return segmented_energy
+
+def generate_ste_hash(segmented_energy):
+    num_hashes = len(segmented_energy) // 8  # Number of 8-bit hashes
+    hash_sequences = []
+    inverted_sequences = []
+    for i in range(num_hashes):
+        segment = segmented_energy[i * 8:(i + 1) * 8]
+        threshold_k = np.mean(segment)
+        hash_sequence = ''.join(['1' if e >= threshold_k else '0' for e in segment])
+        hash_sequences.append(hash_sequence)
+        # Generate inverted hash sequence
+        inverted_sequence = ''.join(format(int(hash_sequence, 2) ^ 0xFF, '08b'))
+        inverted_sequences.append(inverted_sequence)
+
+    # Combine the original and inverted sequences
+    final_sequences = hash_sequences + inverted_sequences
+
+    return final_sequences
+
+def calculate_dwt_hash(audio_signal, total_values=2750):
+    """
+    Perform DWT-based hash sequence generation based on the paper's implementation.
+    """
+    # Step 1: Perform DWT three times to get low-frequency components
+    coeffs = audio_signal
+    for _ in range(3):
+        coeffs, _ = pywt.dwt(coeffs, 'db1')
+    low_freq_components = np.abs(coeffs)  # Take absolute values as stated in the paper
+
+    # Step 2: Process coefficients to calculate Zc(j) based on Equation (7)
+    num_values = len(low_freq_components)
+    h1 = num_values // total_values  # Equation (9)
+    if h1 < 2:
+        raise ValueError("Not enough coefficients to generate Zc sequence.")
+
+    zc_values = [
+        np.sum(low_freq_components[(j - 1) * total_values : j * total_values])
+        for j in range(1, h1 + 1)
+    ]
+
+    # Step 3: Generate the bit sequence H(j) based on Equation (8)
+    bit_sequence = []
+    for j in range(len(zc_values) - 1):
+        if zc_values[j] > zc_values[j + 1]:
+            bit_sequence.append('1')
+        else:
+            bit_sequence.append('0')
+
+    # Step 4: Convert the bit sequence into bytes
+    byte_sequence = []
+    for i in range(0, len(bit_sequence), 8):
+        byte = bit_sequence[i:i + 8]
+        if len(byte) < 8:  # Pad with zeros if necessary
+            byte += ['0'] * (8 - len(byte))
+        byte_sequence.append(''.join(byte))
+
+    # Step 5: Invert the byte sequence for B'(2)
+    inverted_byte_sequence = [format(int(byte, 2) ^ 0xFF, '08b') for byte in byte_sequence]
+
+    # Step 6: Repeat for 2 × h sequences
+    h = len(byte_sequence) // 8  # Equation (9)
+    final_sequences = []
+    for _ in range(2 * h):
+        final_sequences.extend(byte_sequence)
+        final_sequences.extend(inverted_byte_sequence)
+
+    return final_sequences
+
 
 def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_sequence):
     byte_sequence = ''.join(map(str, hash_sequence))  # Convert hash sequence to string
@@ -216,14 +322,19 @@ def video_retrieval_database_construction(videos_dir, db_path):
             # Step 4-6: Process each frame to generate SIFT hash
             print("[INFO] Hash sequence generation from SIFT features has started")
             for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
-                hash_sift = calculate_sift_descriptors(frame_path)
-                update_retrieval_database(db_path, video_id, 'SIFT', j, [hash_sift]) # Wrap the single value in a list to make it iterable
+                hash_sift_list = generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
+        
+                # Insert the original hash sequence into the database
+                update_retrieval_database(db_path, video_id, 'SIFT', j, hash_sift_list[0])
+        
+                # Insert the inverted hash sequence into the database
+                update_retrieval_database(db_path, video_id, 'SIFT', j + 1, hash_sift_list[1])  # Use j + 1 for inverted sequence
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
                 frame_index = j + 1 # Save frame index locally in order to save progress upon keyboard interrupt
             sift_end_time = time.time()
             print("[INFO] Hash sequence generation from SIFT features is complete")
-            print(f"[INFO] SIFT hash sequence generation took {sift_end_time - sift_start_time:.2f} seconds")
+            print(f"[INFO] SIFT hash sequence generation took and mapping{sift_end_time - sift_start_time:.2f} seconds")
 
             # Save progress
             save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
@@ -240,14 +351,17 @@ def video_retrieval_database_construction(videos_dir, db_path):
         if feature_stage == "STE":
             # Step 9-11: Short-term energy hash
             print("[INFO] Hash sequence generation from STE features has started")
-            hash_ste = calculate_ste_hash(audio)
-            for j, h in enumerate(hash_ste):
-                update_retrieval_database(db_path, video_id, 'STE', j, [h]) # Wrap the single value in a list to make it iterable
+            energy_frames = calculate_short_term_energy(audio)
+            segmented_energy = calculate_segmented_energy(energy_frames)
+            hash_ste_list = generate_ste_hash(segmented_energy)
+            print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
+            for j, hash_ste in enumerate(hash_ste_list):
+                update_retrieval_database(db_path, video_id, 'STE', 0, hash_ste)  # Pass full sequence as one string
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
             ste_end_time = time.time()
             print("[INFO] Hash sequence generation from STE features is complete")
-            print(f"[INFO] STE hash sequence generation took {ste_end_time - ste_start_time:.2f} seconds")
+            print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
             # Save progress
             save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
             # Move to next stage
@@ -259,14 +373,15 @@ def video_retrieval_database_construction(videos_dir, db_path):
         if feature_stage == "DWT":
             # Step 13-15: DWT hash
             print("[INFO] Hash sequence generation from DWT features has started")
-            hash_dwt = calculate_dwt_hash(audio)
-            for j, h in enumerate(hash_dwt):
+            dwt_hash_sequences = calculate_dwt_hash(audio)
+            print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
+            for j, h in enumerate(dwt_hash_sequences):
                 update_retrieval_database(db_path, video_id, 'DWT', j, [h]) # Wrap the single value in a list to make it iterable
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
             dwt_end_time = time.time()
             print("[INFO] Hash sequence generation from DWT features is complete")
-            print(f"[INFO] DWT hash sequence generation took {dwt_end_time - dwt_start_time:.2f} seconds")
+            print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
             # Save progress
             save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
             # Move to next video
