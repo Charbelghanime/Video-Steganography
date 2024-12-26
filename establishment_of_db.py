@@ -324,17 +324,19 @@ def video_retrieval_database_construction(videos_dir, db_path):
             for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
                 hash_sift_list = generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
         
-                # Insert the original hash sequence into the database
-                update_retrieval_database(db_path, video_id, 'SIFT', j, hash_sift_list[0])
-        
-                # Insert the inverted hash sequence into the database
-                update_retrieval_database(db_path, video_id, 'SIFT', j + 1, hash_sift_list[1])  # Use j + 1 for inverted sequence
+                # Insert the original hash sequence into the database with FeatureID=0 and append '0'
+                original_feature_id = "00"  # Direct mapping
+                update_retrieval_database(db_path, video_id, original_feature_id, j, hash_sift_list[0])
+
+                # Insert the inverted hash sequence into the database with FeatureID=0 and append '1'
+                inverted_feature_id = "01"  # Indirect mapping
+                update_retrieval_database(db_path, video_id, inverted_feature_id, j, hash_sift_list[1])
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
                 frame_index = j + 1 # Save frame index locally in order to save progress upon keyboard interrupt
             sift_end_time = time.time()
             print("[INFO] Hash sequence generation from SIFT features is complete")
-            print(f"[INFO] SIFT hash sequence generation took and mapping{sift_end_time - sift_start_time:.2f} seconds")
+            print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
 
             # Save progress
             save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
@@ -355,8 +357,15 @@ def video_retrieval_database_construction(videos_dir, db_path):
             segmented_energy = calculate_segmented_energy(energy_frames)
             hash_ste_list = generate_ste_hash(segmented_energy)
             print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
-            for j, hash_ste in enumerate(hash_ste_list):
-                update_retrieval_database(db_path, video_id, 'STE', 0, hash_ste)  # Pass full sequence as one string
+            for j in range(0, len(hash_ste_list), 2):
+                # Direct STE hash sequence
+                direct_feature_id = "10"  # FeatureID for direct mapping
+                update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, hash_ste_list[j])
+
+                # Inverted STE hash sequence
+                inverted_feature_id = "11"  # FeatureID for inverted mapping
+                update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, hash_ste_list[j + 1])
+
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
             ste_end_time = time.time()
@@ -375,8 +384,15 @@ def video_retrieval_database_construction(videos_dir, db_path):
             print("[INFO] Hash sequence generation from DWT features has started")
             dwt_hash_sequences = calculate_dwt_hash(audio)
             print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
-            for j, h in enumerate(dwt_hash_sequences):
-                update_retrieval_database(db_path, video_id, 'DWT', j, [h]) # Wrap the single value in a list to make it iterable
+            for j in range(0, len(dwt_hash_sequences), 2):
+                # Direct STE hash sequence
+                direct_feature_id = "20"  # FeatureID for direct mapping
+                update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, dwt_hash_sequences[j])
+
+                # Inverted STE hash sequence
+                inverted_feature_id = "21"  # FeatureID for inverted mapping
+                update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, dwt_hash_sequences[j + 1])
+
                 # Save progress
                 save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
             dwt_end_time = time.time()
@@ -401,8 +417,7 @@ def video_retrieval_database_construction(videos_dir, db_path):
     else:
         print("[WARNING] Retrieval database contains empty or null entries.")
 
-    delete_directory(frame_dir)
-    delete_files([audio_path])
+    delete_directory("Processed")
     
     # Step 21: Return the constructed retrieval database and carrier videos
     return db_path, carrier_videos
