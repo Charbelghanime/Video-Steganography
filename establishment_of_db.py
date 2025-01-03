@@ -288,6 +288,7 @@ def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_s
 def video_retrieval_database_construction(videos_dir, db_path):
     start_time = time.time() #Start Time
     unique_hash_count = [0]  # Use a mutable list to track the number of unique hash sequences
+    round = 0  # Round counter to keep track of how many rounds the process has gone through
     create_database(db_path)
 
     # Load progress if it exists
@@ -312,8 +313,13 @@ def video_retrieval_database_construction(videos_dir, db_path):
 
     signal.signal(signal.SIGINT, handle_interrupt)
 
-    while not unique_hash_count[0] < 256:  # Check if unique hash sequences generated are less than 256
+    while unique_hash_count[0] < 256:  # Check if unique hash sequences generated are less than 256
+
+        round_start_time = time.time() # Time the round
+
         terminate = False # Flag to terminate the while loop
+        round += 1
+        print(f"[INFO] Starting round {round} of processing...")
         # Process each video file
         for i, video_path in enumerate(video_files):
             if unique_hash_count[0] >= 256:
@@ -326,10 +332,11 @@ def video_retrieval_database_construction(videos_dir, db_path):
             # Step 3: Extract frame images
             frames, frame_dir = extract_frames(video_path, output_dir)
 
-            # Time the process of hash generation based on SIFT 
-            sift_start_time = time.time()
-
             if feature_stage == "SIFT":
+                
+                # Time the process of hash generation based on SIFT 
+                sift_start_time = time.time()
+
                 # Step 4-6: Process each frame to generate SIFT hash
                 print("[INFO] Hash sequence generation from SIFT features has started")
                 for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
@@ -357,11 +364,12 @@ def video_retrieval_database_construction(videos_dir, db_path):
             # Step 8: Extract audio
             audio, audio_path = extract_audio(video_path)
 
-            # Time the process of hash generation based on STE 
-            ste_start_time = time.time()
-
             
             if feature_stage == "STE":
+
+                # Time the process of hash generation based on STE 
+                ste_start_time = time.time()
+
                 # Step 9-11: Short-term energy hash
                 print("[INFO] Hash sequence generation from STE features has started")
                 energy_frames = calculate_short_term_energy(audio)
@@ -386,11 +394,12 @@ def video_retrieval_database_construction(videos_dir, db_path):
                 save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
                 # Move to next stage
                 feature_stage = "DWT" 
-            
-            # Time the process of hash generation based on DWT coefficients
-            dwt_start_time = time.time()
 
             if feature_stage == "DWT":
+
+                # Time the process of hash generation based on DWT coefficients
+                dwt_start_time = time.time()
+
                 # Step 13-15: DWT hash
                 print("[INFO] Hash sequence generation from DWT features has started")
                 dwt_hash_sequences = calculate_dwt_hash(audio)
@@ -419,6 +428,9 @@ def video_retrieval_database_construction(videos_dir, db_path):
                 carrier_videos.append(video_path)
                 print(f"[INFO] Video {video_path} processed")
 
+        round_end_time = time.time()
+        print(f"[INFO] Completed round {round} in {round_end_time - round_start_time:.2f} seconds")
+        
         if terminate:
             break  # Break out of the while loop
 
