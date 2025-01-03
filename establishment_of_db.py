@@ -103,18 +103,14 @@ def create_database(db_path):
     else:
         print(f"[INFO] Database already exists at {db_path}")
 
-def insert_unique_into_database(db_path, byte_sequence, video_id, feature_id, position_id):
+def insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id):
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT COUNT(*) FROM RetrievalDatabase WHERE ByteSequence = ?
-    """, (byte_sequence,))
-    if cursor.fetchone()[0] == 0:  # Only insert if the ByteSequence is unique
-        cursor.execute("""
-            INSERT INTO RetrievalDatabase (ByteSequence, VideoID, FeatureID, PositionID)
-            VALUES (?, ?, ?, ?)
-        """, (byte_sequence, video_id, feature_id, position_id))
-        conn.commit()
+        INSERT INTO RetrievalDatabase (ByteSequence, VideoID, FeatureID, PositionID)
+        VALUES (?, ?, ?, ?)
+    """, (byte_sequence, video_id, feature_id, position_id))
+    conn.commit()
     conn.close()
 
 def check_database_integrity(db_path):
@@ -267,7 +263,7 @@ def calculate_dwt_hash(audio_signal, total_values=2750):
 
 def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_sequence):
     byte_sequence = ''.join(map(str, hash_sequence))  # Convert hash sequence to string
-    insert_unique_into_database(db_path, byte_sequence, video_id, feature_id, position_id)
+    insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id)
 
 def check_all_hash_sequences_generated(db_path):
     conn = sqlite3.connect(db_path)
