@@ -103,15 +103,35 @@ def create_database(db_path):
     else:
         print(f"[INFO] Database already exists at {db_path}")
 
-def insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id):
+def insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id, unique_hash_count):
+    """
+    Inserts a unique entry into the RetrievalDatabase. If an entry with the same
+    ByteSequence, VideoID, FeatureID, and PositionID already exists, it skips insertion.
+    Also keep track of the variable related to the unique hash sequences generated in the datbase. 
+    """
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+
+    # Check if the byte sequence is unique
     cursor.execute("""
-        INSERT INTO RetrievalDatabase (ByteSequence, VideoID, FeatureID, PositionID)
-        VALUES (?, ?, ?, ?)
+        SELECT COUNT(*) FROM RetrievalDatabase WHERE ByteSequence = ?
+    """, (byte_sequence,))
+    if cursor.fetchone()[0] == 0:
+        unique_hash_count[0] += 1
+
+    # Check for duplicate entry
+    cursor.execute("""
+        SELECT COUNT(*) FROM RetrievalDatabase 
+        WHERE ByteSequence = ? AND VideoID = ? AND FeatureID = ? AND PositionID = ?
     """, (byte_sequence, video_id, feature_id, position_id))
-    conn.commit()
-    conn.close()
+
+    if cursor.fetchone()[0] == 0:  # Proceed if no duplicate entry exists
+        cursor.execute("""
+            INSERT INTO RetrievalDatabase (ByteSequence, VideoID, FeatureID, PositionID)
+            VALUES (?, ?, ?, ?)
+        """, (byte_sequence, video_id, feature_id, position_id))
+        conn.commit()
+        conn.close()
 
 def check_database_integrity(db_path):
     conn = sqlite3.connect(db_path)
@@ -261,21 +281,13 @@ def calculate_dwt_hash(audio_signal, total_values=2750):
     return final_sequences
 
 
-def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_sequence):
+def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_sequence, unique_hash_count):
     byte_sequence = ''.join(map(str, hash_sequence))  # Convert hash sequence to string
-    insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id)
-
-def check_all_hash_sequences_generated(db_path):
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(DISTINCT ByteSequence) FROM RetrievalDatabase")
-    unique_count = cursor.fetchone()[0]
-    conn.close()
-    return unique_count == 256
+    insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id, unique_hash_count)
 
 def video_retrieval_database_construction(videos_dir, db_path):
     start_time = time.time() #Start Time
-
+    unique_hash_count = [0]  # Use a mutable list to track the number of unique hash sequences
     create_database(db_path)
 
     # Load progress if it exists
@@ -300,108 +312,115 @@ def video_retrieval_database_construction(videos_dir, db_path):
 
     signal.signal(signal.SIGINT, handle_interrupt)
 
-    # Process each video file
-    for i, video_path in enumerate(video_files):
-        if check_all_hash_sequences_generated(db_path):
-            print("[INFO] All 256 unique hash sequences have been generated. Terminating early.")
-            break
+    while not unique_hash_count[0] < 256:  # Check if unique hash sequences generated are less than 256
+        terminate = False # Flag to terminate the while loop
+        # Process each video file
+        for i, video_path in enumerate(video_files):
+            if unique_hash_count[0] >= 256:
+                print("[INFO] All 256 unique hash sequences have been generated. Terminating early.")
+                terminate = True
+                break #Break out of the for loop
 
-        video_id = i + 1 # Assign a unique ID to the video
+            video_id = i + 1 # Assign a unique ID to the video
 
-        # Step 3: Extract frame images
-        frames, frame_dir = extract_frames(video_path, output_dir)
+            # Step 3: Extract frame images
+            frames, frame_dir = extract_frames(video_path, output_dir)
 
-        # Time the process of hash generation based on SIFT 
-        sift_start_time = time.time()
+            # Time the process of hash generation based on SIFT 
+            sift_start_time = time.time()
 
-        if feature_stage == "SIFT":
-            # Step 4-6: Process each frame to generate SIFT hash
-            print("[INFO] Hash sequence generation from SIFT features has started")
-            for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
-                hash_sift_list = generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
-        
-                # Insert the original hash sequence into the database with FeatureID=0 and append '0'
-                original_feature_id = "00"  # Direct mapping
-                update_retrieval_database(db_path, video_id, original_feature_id, j, hash_sift_list[0])
+            if feature_stage == "SIFT":
+                # Step 4-6: Process each frame to generate SIFT hash
+                print("[INFO] Hash sequence generation from SIFT features has started")
+                for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
+                    hash_sift_list = generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
+            
+                    # Insert the original hash sequence into the database with FeatureID=0 and append '0'
+                    original_feature_id = "00"  # Direct mapping
+                    update_retrieval_database(db_path, video_id, original_feature_id, j, hash_sift_list[0], unique_hash_count)
 
-                # Insert the inverted hash sequence into the database with FeatureID=0 and append '1'
-                inverted_feature_id = "01"  # Indirect mapping
-                update_retrieval_database(db_path, video_id, inverted_feature_id, j, hash_sift_list[1])
-                # Save progress
-                save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
-                frame_index = j + 1 # Save frame index locally in order to save progress upon keyboard interrupt
-            sift_end_time = time.time()
-            print("[INFO] Hash sequence generation from SIFT features is complete")
-            print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
-
-            # Save progress
-            save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
-            # Move to next stage
-            feature_stage = "STE"  
-
-        # Step 8: Extract audio
-        audio, audio_path = extract_audio(video_path)
-
-        # Time the process of hash generation based on STE 
-        ste_start_time = time.time()
-
-        
-        if feature_stage == "STE":
-            # Step 9-11: Short-term energy hash
-            print("[INFO] Hash sequence generation from STE features has started")
-            energy_frames = calculate_short_term_energy(audio)
-            segmented_energy = calculate_segmented_energy(energy_frames)
-            hash_ste_list = generate_ste_hash(segmented_energy)
-            print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
-            for j in range(0, len(hash_ste_list), 2):
-                # Direct STE hash sequence
-                direct_feature_id = "10"  # FeatureID for direct mapping
-                update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, hash_ste_list[j])
-
-                # Inverted STE hash sequence
-                inverted_feature_id = "11"  # FeatureID for inverted mapping
-                update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, hash_ste_list[j + 1])
+                    # Insert the inverted hash sequence into the database with FeatureID=0 and append '1'
+                    inverted_feature_id = "01"  # Indirect mapping
+                    update_retrieval_database(db_path, video_id, inverted_feature_id, j, hash_sift_list[1], unique_hash_count)
+                    # Save progress
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
+                    frame_index = j + 1 # Save frame index locally in order to save progress upon keyboard interrupt
+                sift_end_time = time.time()
+                print("[INFO] Hash sequence generation from SIFT features is complete")
+                print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
 
                 # Save progress
-                save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
-            ste_end_time = time.time()
-            print("[INFO] Hash sequence generation from STE features is complete")
-            print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
-            # Save progress
-            save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
-            # Move to next stage
-            feature_stage = "DWT" 
-        
-        # Time the process of hash generation based on DWT coefficients
-        dwt_start_time = time.time()
+                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
+                # Move to next stage
+                feature_stage = "STE"  
 
-        if feature_stage == "DWT":
-            # Step 13-15: DWT hash
-            print("[INFO] Hash sequence generation from DWT features has started")
-            dwt_hash_sequences = calculate_dwt_hash(audio)
-            print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
-            for j in range(0, len(dwt_hash_sequences), 2):
-                # Direct STE hash sequence
-                direct_feature_id = "20"  # FeatureID for direct mapping
-                update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, dwt_hash_sequences[j])
+            # Step 8: Extract audio
+            audio, audio_path = extract_audio(video_path)
 
-                # Inverted STE hash sequence
-                inverted_feature_id = "21"  # FeatureID for inverted mapping
-                update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, dwt_hash_sequences[j + 1])
+            # Time the process of hash generation based on STE 
+            ste_start_time = time.time()
 
+            
+            if feature_stage == "STE":
+                # Step 9-11: Short-term energy hash
+                print("[INFO] Hash sequence generation from STE features has started")
+                energy_frames = calculate_short_term_energy(audio)
+                segmented_energy = calculate_segmented_energy(energy_frames)
+                hash_ste_list = generate_ste_hash(segmented_energy)
+                print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
+                for j in range(0, len(hash_ste_list), 2):
+                    # Direct STE hash sequence
+                    direct_feature_id = "10"  # FeatureID for direct mapping
+                    update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, hash_ste_list[j], unique_hash_count)
+
+                    # Inverted STE hash sequence
+                    inverted_feature_id = "11"  # FeatureID for inverted mapping
+                    update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, hash_ste_list[j + 1], unique_hash_count)
+
+                    # Save progress
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
+                ste_end_time = time.time()
+                print("[INFO] Hash sequence generation from STE features is complete")
+                print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
                 # Save progress
-                save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
-            dwt_end_time = time.time()
-            print("[INFO] Hash sequence generation from DWT features is complete")
-            print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
-            # Save progress
-            save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
-            # Move to next video
-            feature_stage = "SIFT"
+                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
+                # Move to next stage
+                feature_stage = "DWT" 
+            
+            # Time the process of hash generation based on DWT coefficients
+            dwt_start_time = time.time()
 
-        # Step 17: Append to carrier videos
-        carrier_videos.append(video_path)
-        print(f"[INFO] Video {video_path} processed")
+            if feature_stage == "DWT":
+                # Step 13-15: DWT hash
+                print("[INFO] Hash sequence generation from DWT features has started")
+                dwt_hash_sequences = calculate_dwt_hash(audio)
+                print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
+                for j in range(0, len(dwt_hash_sequences), 2):
+                    # Direct STE hash sequence
+                    direct_feature_id = "20"  # FeatureID for direct mapping
+                    update_retrieval_database(db_path, video_id, direct_feature_id, j // 2, dwt_hash_sequences[j], unique_hash_count)
+
+                    # Inverted STE hash sequence
+                    inverted_feature_id = "21"  # FeatureID for inverted mapping
+                    update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, dwt_hash_sequences[j + 1], unique_hash_count)
+
+                    # Save progress
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
+                dwt_end_time = time.time()
+                print("[INFO] Hash sequence generation from DWT features is complete")
+                print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
+                # Save progress
+                save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
+                # Move to next video
+                feature_stage = "SIFT"
+
+            # Step 17: Append to carrier videos
+            if (video_path) not in carrier_videos: # Check if the video is already in the carrier videos folder
+                carrier_videos.append(video_path)
+                print(f"[INFO] Video {video_path} processed")
+
+        if terminate:
+            break  # Break out of the while loop
 
     end_time = time.time()
     total_duration = end_time - start_time
