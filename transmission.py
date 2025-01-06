@@ -1,6 +1,7 @@
 import math
 import sqlite3
 from establishment_of_db import video_retrieval_database_construction
+import os
 
 def segment_and_pad(secret_info):
     """
@@ -21,6 +22,8 @@ def segment_and_pad(secret_info):
         byte_sequence = [secret_info[i:i + 8] for i in range(0, len(secret_info), 8)]
         # Add a byte of '00000000' to indicate no padding
         byte_sequence.append('00000000')
+        # Notify the user that the message was not padded
+        print("[INFO] The message was not padded. '00000000' is padded.")
 
     return byte_sequence
 
@@ -61,12 +64,18 @@ def transmit_secret_info(db_path, secret_info):
 
     return retrieval_info
 
-# Example usage
-videos_dir = "Videos"  # Directory containing carrier videos
-db_path = "retrieval_database.sqlite"  # Path to the retrieval database
-db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path)
-# Example secret information (binary string)
-secret_info = "1101011100101110"  # Replace with actual secret information
+if __name__ == "__main__":
+    # Example usage
+    videos_dir = "Videos"  # Directory containing carrier videos
+    db_path = "retrieval_database.sqlite"  # Path to the retrieval database
+    
+    # Construct the database if necessary
+    if os.path.exists(db_path):
+        print(f"[INFO] Retrieval database already exists at: {db_path}")
+    else:
+        db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE="progress.json")
+    # Example secret information (binary string)
+    secret_info = "1101011100101110"  # Replace with actual secret information
 
-retrieval_info = transmit_secret_info(videos_dir, db_path, secret_info)
-print("[INFO] Transmission complete.")
+    retrieval_info = transmit_secret_info(db_path, secret_info)
+    print("[INFO] Transmission complete.")
