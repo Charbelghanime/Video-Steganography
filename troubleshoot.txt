@@ -1,0 +1,12 @@
+The code is designed to natively process videos encoded in H.264 and AAC for audio.
+If in case the video is not compatible and generating errors in the output, follow these steps:
+1- ffmpeg -i Videos/<Video>.mp4 -c:v libx264 -crf 23 -preset fast -c:a aac -b:a 128k Videos/<Video>-fixed.mp4 #Convert the video encoding to H.264 and AAC
+    -c:v libx264: Converts the video stream to H.264.
+    -crf 23: Controls quality (lower value = higher quality, range: 18–28).
+    -preset fast: Balances encoding speed and compression efficiency.
+    -c:a aac: Converts the audio stream to AAC.
+    -b:a 128k: Sets the audio bitrate to 128 kbps.
+2- ffprobe -i Videos/<Video>-fixed.mp4 #Verify the encoded video
+3- rm Videos/<Video>.mp4 #Delete old video with incompatible format
+4- mv Videos/<Video>-fixed.mp4 Videos/<Video>.mp4 # Replace <Video>.mp4 in the directory
+
