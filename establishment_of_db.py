@@ -8,9 +8,6 @@ import sqlite3  # For SQLite database operations
 import json  # For saving and loading progress
 import signal  # For handling keyboard interrupts
 
-# Progress file path
-PROGRESS_FILE = "progress.json"
-
 # Utility functions
 def save_progress(progress):
     with open(PROGRESS_FILE, 'w') as f:
@@ -285,10 +282,21 @@ def update_retrieval_database(db_path, video_id, feature_id, position_id, hash_s
     byte_sequence = ''.join(map(str, hash_sequence))  # Convert hash sequence to string
     insert_into_database(db_path, byte_sequence, video_id, feature_id, position_id, unique_hash_count)
 
-def video_retrieval_database_construction(videos_dir, db_path):
+def get_row_count(db_path):
+    """Get the current number of rows in the database."""
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM RetrievalDatabase")
+    row_count = cursor.fetchone()[0]
+    conn.close()
+    return row_count
+
+def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
     start_time = time.time() #Start Time
     unique_hash_count = [0]  # Use a mutable list to track the number of unique hash sequences
     round = 0  # Round counter to keep track of how many rounds the process has gone through
+    no_change_counter = 0  # Counter to track consecutive rounds with no new entries  
+    max_rounds_without_change = 5  # Maximum allowed rounds without database entry changes  
     create_database(db_path)
 
     # Load progress if it exists
@@ -313,6 +321,7 @@ def video_retrieval_database_construction(videos_dir, db_path):
 
     signal.signal(signal.SIGINT, handle_interrupt)
 
+    previous_row_count = get_row_count(db_path)  # Get the initial row count
     while unique_hash_count[0] < 256:  # Check if unique hash sequences generated are less than 256
 
         round_start_time = time.time() # Time the round
@@ -428,6 +437,20 @@ def video_retrieval_database_construction(videos_dir, db_path):
                 carrier_videos.append(video_path)
                 print(f"[INFO] Video {video_path} processed")
 
+        # Check for changes in database row count
+        current_row_count = get_row_count(db_path)
+        if current_row_count == previous_row_count:
+            no_change_counter += 1
+            print(f"[INFO] No new entries detected in round {round}. Counter: {no_change_counter}/{max_rounds_without_change}")
+        else:
+            no_change_counter = 0  # Reset the counter if new rows are added
+        previous_row_count = current_row_count
+
+        # Terminate if no new entries after maximum allowed rounds
+        if no_change_counter >= max_rounds_without_change:
+            print("[INFO] No new entries detected for 5 consecutive rounds. Terminating to save time.")
+            break
+
         round_end_time = time.time()
         print(f"[INFO] Completed round {round} in {round_end_time - round_start_time:.2f} seconds")
         
@@ -449,9 +472,12 @@ def video_retrieval_database_construction(videos_dir, db_path):
     # Step 21: Return the constructed retrieval database and carrier videos
     return db_path, carrier_videos
 
-# Example usage
-videos_dir = "Videos" # Directory containing input videos
-db_path = "retrieval_database.sqlite"
-db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path)
-print(f"[INFO] Database stored at {db_path}")
-print(f"[INFO] Carrier Videos: {carrier_videos}")
+if __name__ == "__main__": # Execute only when called directly
+    # Example usage
+    # Progress file path
+    PROGRESS_FILE = "progress.json"
+    videos_dir = "Videos" # Directory containing input videos
+    db_path = "retrieval_database.sqlite"
+    db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE)
+    print(f"[INFO] Database stored at {db_path}")
+    print(f"[INFO] Carrier Videos: {carrier_videos}")
