@@ -317,6 +317,7 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
     def handle_interrupt(signal, frame):
         print("\n[INFO] KeyboardInterrupt detected. Saving progress ....")
         save_progress({"video_index": video_index, "frame_index": frame_index, "feature_stage": feature_stage})
+        delete_directory("Processed")
         exit(1)
 
     signal.signal(signal.SIGINT, handle_interrupt)
