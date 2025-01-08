@@ -61,6 +61,19 @@ def remove_padding(byte_sequence):
     secret_info = ''.join(byte_sequence)
     return secret_info
 
+def binary_to_text(binary_data):
+    """
+    Convert binary string data to a readable text message.
+
+    Args:
+        binary_data (str): Binary string representing the secret information.
+
+    Returns:
+        str: Decoded text message.
+    """
+    chars = [chr(int(binary_data[i:i+8], 2)) for i in range(0, len(binary_data), 8)]
+    return ''.join(chars)
+
 def extract_secret_info(db_path, retrieval_info):
     """
     Extract the secret information from the retrieval information and database.
@@ -77,18 +90,19 @@ def extract_secret_info(db_path, retrieval_info):
     print(f"[INFO] Byte sequence retrieved: {byte_sequence}")
 
     # Step 2: Remove padding to recover secret information
-    secret_info = remove_padding(byte_sequence)
-    print(f"[INFO] Extracted secret information: {secret_info}")
+    binary_data = remove_padding(byte_sequence)
+    print(f"[INFO] Extracted secret information (binary): {binary_data}")
 
-    return secret_info
+    # Step 3: Convert binary data to readable text
+    message = binary_to_text(binary_data)
+
+    return message
 
 if __name__ == "__main__":
-    # To do: implement obtaining the hashes on the receiver end through generating the hashes on the receiver end based on auxiliary information
-    # Not ot forget that the videos must transmitted to the receiver based on the auxiliary information
     # Example usage
     db_path = "retrieval_database.sqlite"  # Path to the retrieval database
-    retrieval_info = [(1, '01', 430), (4, '10', 10), (1, '00', 36)]  # Example retrieval information
+    retrieval_info = [(7, '01', 3305), (7, '01', 2144), (1, '01', 319), (7, '01', 2179), (5, '01', 793), (7, '00', 2042)]
 
     # Extract the secret information
-    secret_info = extract_secret_info(db_path, retrieval_info)
-    print("[INFO] Final secret information:", secret_info)
+    message = extract_secret_info(db_path, retrieval_info)
+    print("[INFO] Final message:", message)
