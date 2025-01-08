@@ -1,7 +1,21 @@
 import math
 import sqlite3
-from establishment_of_db import video_retrieval_database_construction
 import os
+from establishment_of_db import video_retrieval_database_construction
+import random
+
+def text_to_binary(text):
+    """
+    Convert a string to its binary representation.
+    """
+    return ''.join(format(ord(char), '08b') for char in text)
+
+def read_text_file(file_path):
+    """
+    Read the content of a text file.
+    """
+    with open(file_path, 'r', encoding='utf-8') as file:
+        return file.read()
 
 def segment_and_pad(secret_info):
     """
@@ -19,11 +33,10 @@ def segment_and_pad(secret_info):
         # Add an additional byte to indicate the number of zeros padded
         byte_sequence.append(format(padding, '08b'))
     else:
+        # Segment into 8-bit chunks and add auxiliary byte 00000000
         byte_sequence = [secret_info[i:i + 8] for i in range(0, len(secret_info), 8)]
-        # Add a byte of '00000000' to indicate no padding
         byte_sequence.append('00000000')
-        # Notify the user that the message was not padded
-        print("[INFO] The message was not padded. '00000000' is padded.")
+        print("[INFO] The message was not padded. Auxiliary information '00000000' is added.")
 
     return byte_sequence
 
@@ -38,9 +51,9 @@ def retrieve_from_database(db_path, byte_sequence):
 
     for byte in byte_sequence:
         cursor.execute("SELECT VideoID, FeatureID, PositionID FROM RetrievalDatabase WHERE ByteSequence = ?", (byte,))
-        result = cursor.fetchone()
-        if result:
-            retrieval_info.append(result)
+        results = cursor.fetchall()
+        if results:
+            retrieval_info.append(random.choice(results))
         else:
             print(f"[WARNING] No match found for byte sequence: {byte}")
 
@@ -68,14 +81,34 @@ if __name__ == "__main__":
     # Example usage
     videos_dir = "Videos"  # Directory containing carrier videos
     db_path = "retrieval_database.sqlite"  # Path to the retrieval database
-    
-    # Construct the database if necessary
+
+    # Check if the database exists or needs to be constructed
     if os.path.exists(db_path):
         print(f"[INFO] Retrieval database already exists at: {db_path}")
     else:
-        db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE="progress.json")
-    # Example secret information (binary string)
-    secret_info = "1101011100101110"  # Replace with actual secret information
+        db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path)
 
-    retrieval_info = transmit_secret_info(db_path, secret_info)
+    # Prompt user for input type
+    while True:
+        try:
+            option = int(input("Choose an option:\n1. Message\n2. Message in a text file\nEnter your choice (1 or 2): ").strip())
+            if option == 1:
+                secret_info = input("Enter the secret message: ").strip()
+                binary_secret_info = text_to_binary(secret_info)
+                break
+            elif option == 2:
+                file_path = input("Enter the path to the text file: ").strip()
+                if os.path.exists(file_path):
+                    secret_info = read_text_file(file_path)
+                    binary_secret_info = text_to_binary(secret_info)
+                    break
+                else:
+                    print("[ERROR] File not found. Please try again.")
+            else:
+                print("[ERROR] Invalid choice. Please choose either 1 or 2.")
+        except ValueError:
+            print("[ERROR] Please enter a valid number.")
+
+    # Transmit the secret information
+    retrieval_info = transmit_secret_info(db_path, binary_secret_info)
     print("[INFO] Transmission complete.")
