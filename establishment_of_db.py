@@ -9,7 +9,7 @@ import json  # For saving and loading progress
 import signal  # For handling keyboard interrupts
 
 # Utility functions
-def save_progress(progress):
+def save_progress(progress, PROGRESS_FILE):
     with open(PROGRESS_FILE, 'w') as f:
         json.dump(progress, f)
 
@@ -296,7 +296,7 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
     unique_hash_count = [0]  # Use a mutable list to track the number of unique hash sequences
     round = 0  # Round counter to keep track of how many rounds the process has gone through
     no_change_counter = 0  # Counter to track consecutive rounds with no new entries  
-    max_rounds_without_change = 5  # Maximum allowed rounds without database entry changes  
+    max_rounds_without_change = 2  # Maximum allowed rounds without database entry changes  
     create_database(db_path)
 
     # Load progress if it exists
@@ -316,7 +316,7 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
 
     def handle_interrupt(signal, frame):
         print("\n[INFO] KeyboardInterrupt detected. Saving progress ....")
-        save_progress({"video_index": video_index, "frame_index": frame_index, "feature_stage": feature_stage})
+        save_progress({"video_index": video_index, "frame_index": frame_index, "feature_stage": feature_stage}, PROGRESS_FILE)
         delete_directory("Processed")
         exit(1)
 
@@ -360,14 +360,14 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
                     inverted_feature_id = "01"  # Indirect mapping
                     update_retrieval_database(db_path, video_id, inverted_feature_id, j, hash_sift_list[1], unique_hash_count)
                     # Save progress
-                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"}, PROGRESS_FILE)
                     frame_index = j + 1 # Save frame index locally in order to save progress upon keyboard interrupt
                 sift_end_time = time.time()
                 print("[INFO] Hash sequence generation from SIFT features is complete")
                 print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
 
                 # Save progress
-                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
+                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"}, PROGRESS_FILE)
                 # Move to next stage
                 feature_stage = "STE"  
 
@@ -396,12 +396,12 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
                     update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, hash_ste_list[j + 1], unique_hash_count)
 
                     # Save progress
-                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"}, PROGRESS_FILE)
                 ste_end_time = time.time()
                 print("[INFO] Hash sequence generation from STE features is complete")
                 print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
                 # Save progress
-                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
+                save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"}, PROGRESS_FILE)
                 # Move to next stage
                 feature_stage = "DWT" 
 
@@ -424,12 +424,12 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
                     update_retrieval_database(db_path, video_id, inverted_feature_id, j // 2, dwt_hash_sequences[j + 1], unique_hash_count)
 
                     # Save progress
-                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
+                    save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"}, PROGRESS_FILE)
                 dwt_end_time = time.time()
                 print("[INFO] Hash sequence generation from DWT features is complete")
                 print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
                 # Save progress
-                save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
+                save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"}, PROGRESS_FILE)
                 # Move to next video
                 feature_stage = "SIFT"
 
