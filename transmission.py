@@ -81,12 +81,13 @@ if __name__ == "__main__":
     # Example usage
     videos_dir = "Videos"  # Directory containing carrier videos
     db_path = "retrieval_database.sqlite"  # Path to the retrieval database
+    PROGRESS_FILE = "progress.json" # Path to the progress file
 
     # Check if the database exists or needs to be constructed
     if os.path.exists(db_path):
         print(f"[INFO] Retrieval database already exists at: {db_path}")
     else:
-        db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path)
+        db_path, carrier_videos = video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE)
 
     # Prompt user for input type
     while True:
