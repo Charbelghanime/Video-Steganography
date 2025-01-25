@@ -1,19 +1,15 @@
-import math
 import sqlite3
 import os
-from establishment_of_db import video_retrieval_database_construction
 import random
+import json
+from establishment_of_db import video_retrieval_database_construction
 
 def text_to_binary(text):
-    """
-    Convert a string to its binary representation.
-    """
+    """Convert a string to its binary representation."""
     return ''.join(format(ord(char), '08b') for char in text)
 
 def read_text_file(file_path):
-    """
-    Read the content of a text file.
-    """
+    """Read the content of a text file."""
     with open(file_path, 'r', encoding='utf-8') as file:
         return file.read()
 
@@ -72,7 +68,12 @@ def transmit_secret_info(db_path, secret_info):
     retrieval_info = retrieve_from_database(db_path, byte_sequence)
     print(f"[INFO] Retrieved retrieval information: {retrieval_info}")
 
-    # Step 3: Send the retrieval information and carrier videos (here just simulate sending)
+    # Step 3: Save retrieval information to a file
+    with open("retrieval_info.json", "w") as f:
+        json.dump(retrieval_info, f)
+    print("[INFO] Retrieval information saved to retrieval_info.json")
+
+    # Step 4: Simulate sending the retrieval information and carrier videos
     print(f"[INFO] Transmitting retrieval information and carrier videos...")
 
     return retrieval_info
@@ -81,7 +82,7 @@ if __name__ == "__main__":
     # Example usage
     videos_dir = "Videos"  # Directory containing carrier videos
     db_path = "retrieval_database.sqlite"  # Path to the retrieval database
-    PROGRESS_FILE = "progress.json" # Path to the progress file
+    PROGRESS_FILE = "progress.json"  # Path to the progress file
 
     # Check if the database exists or needs to be constructed
     if os.path.exists(db_path):
