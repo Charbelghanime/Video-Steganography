@@ -449,7 +449,7 @@ def video_retrieval_database_construction(videos_dir, db_path, PROGRESS_FILE):
 
         # Terminate if no new entries after maximum allowed rounds
         if no_change_counter >= max_rounds_without_change:
-            print("[INFO] No new entries detected for 2 consecutive rounds. Terminating to save time.")
+            print("[INFO] No new entries detected for 5 consecutive rounds. Terminating to save time.")
             break
 
         round_end_time = time.time()
