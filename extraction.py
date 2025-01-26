@@ -1,5 +1,6 @@
 import sqlite3
 import json
+import os
 
 
 class SecretExtractor:
@@ -85,15 +86,28 @@ class SecretExtractor:
         chars = [chr(int(binary_data[i:i + 8], 2)) for i in range(0, len(binary_data), 8)]
         return ''.join(chars)
 
-    def extract_secret_info(self, retrieval_info):
+    def binary_to_file(self, binary_data, file_path):
+        """
+        Convert binary string data to a file.
+
+        Args:
+            binary_data (str): Binary string representing the file content.
+            file_path (str): Path to save the file.
+        """
+        with open(file_path, 'wb') as file:
+            file.write(bytes(int(binary_data[i:i + 8], 2) for i in range(0, len(binary_data), 8)))
+
+    def extract_secret_info(self, retrieval_info, file_extension, is_file):
         """
         Extract the secret information from the retrieval information and database.
 
         Args:
             retrieval_info (list): List of tuples containing retrieval information (VideoID, FeatureID, PositionID).
+            file_extension (str): The file extension to use for the recovered file (if applicable).
+            is_file (bool): Whether the secret is a file or a message.
 
         Returns:
-            str: Extracted secret information.
+            tuple: (message, file_extension, file_path) if a file is extracted, else (message, None, None)
         """
         # Step 1: Map retrieval info to byte sequence
         byte_sequence = self.map_retrieval_info_to_bytes(retrieval_info)
@@ -103,10 +117,24 @@ class SecretExtractor:
         binary_data = self.remove_padding(byte_sequence)
         print(f"[INFO] Extracted secret information (binary): {binary_data}")
 
-        # Step 3: Convert binary data to readable text
-        message = self.binary_to_text(binary_data)
+        if is_file:
+            # Step 3: Save the file content
+            file_path = os.path.join(os.getcwd(), f"recovered{file_extension}")  # Save in current directory
 
-        return message
+            if file_extension in ['.txt', '.md', '.py']:  # Text-based files
+                file_content_text = self.binary_to_text(binary_data)
+                with open(file_path, 'w', encoding='utf-8') as file:
+                    file.write(file_content_text)
+            else:  # Binary files
+                self.binary_to_file(binary_data, file_path)
+
+            print(f"[INFO] File recovered and saved as: {file_path}")
+            return None, file_extension, file_path
+        else:
+            # Step 3: Convert binary data to text (message)
+            message = self.binary_to_text(binary_data)
+            print(f"[INFO] Extracted message: {message}")
+            return message, None, None
 
 
 if __name__ == "__main__":
@@ -116,8 +144,13 @@ if __name__ == "__main__":
     # Load retrieval information from the file
     try:
         with open("retrieval_info.json", "r") as f:
-            retrieval_info = json.load(f)
+            retrieval_data = json.load(f)
+            retrieval_info = retrieval_data["retrieval_info"]
+            file_extension = retrieval_data["file_extension"]
+            is_file = retrieval_data["is_file"]
         print(f"[INFO] Retrieval information loaded: {retrieval_info}")
+        print(f"[INFO] File extension: {file_extension}")
+        print(f"[INFO] Is file: {is_file}")
     except FileNotFoundError:
         print("[ERROR] Retrieval information file not found. Run transmission.py first.")
         exit(1)
@@ -126,5 +159,8 @@ if __name__ == "__main__":
     extractor = SecretExtractor(db_path)
 
     # Extract the secret information
-    message = extractor.extract_secret_info(retrieval_info)
-    print("[INFO] Final message:", message)
+    message, file_extension, file_path = extractor.extract_secret_info(retrieval_info, file_extension, is_file)
+    if message:
+        print("[INFO] Final message:", message)
+    else:
+        print(f"[INFO] File recovered with extension: {file_extension}, saved at: {file_path}")
