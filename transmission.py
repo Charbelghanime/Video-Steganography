@@ -2,6 +2,7 @@ import sqlite3
 import os
 import random
 import json
+import subprocess
 from establishment_of_db import VideoProcessor  # Import the VideoProcessor class
 
 
@@ -13,10 +14,15 @@ class SecretTransmitter:
         """Convert a string to its binary representation."""
         return ''.join(format(ord(char), '08b') for char in text)
 
-    def read_text_file(self, file_path):
-        """Read the content of a text file."""
-        with open(file_path, 'r', encoding='utf-8') as file:
-            return file.read()
+    def read_binary_file(self, file_path):
+        """Read the content of a binary file and convert it to a binary string."""
+        with open(file_path, 'rb') as file:
+            binary_data = file.read()
+            return ''.join(format(byte, '08b') for byte in binary_data)
+
+    def get_file_extension(self, file_path):
+        """Extract the file extension from the file path."""
+        return os.path.splitext(file_path)[1]  # Get the file extension (e.g., '.txt', '.jpg')
 
     def segment_and_pad(self, secret_info):
         """
@@ -61,10 +67,17 @@ class SecretTransmitter:
         conn.close()
         return retrieval_info
 
-    def transmit_secret_info(self, secret_info):
+    def transmit_secret_info(self, secret_info, file_path=None):
         """
         Transmit the secret information using the constructed retrieval database and carrier videos.
         """
+        file_extension = None
+        if file_path:
+            # If a file is provided, read its binary content and store the file extension
+            file_extension = self.get_file_extension(file_path)  # Get the file extension (e.g., '.txt')
+            file_content = self.read_binary_file(file_path)  # Read file content as binary
+            secret_info = file_content  # Use only the file content (extension is stored separately)
+
         # Step 1: Segment and pad the secret information
         byte_sequence = self.segment_and_pad(secret_info)
         print(f"[INFO] Byte sequence after segmentation and padding: {byte_sequence}")
@@ -73,10 +86,14 @@ class SecretTransmitter:
         retrieval_info = self.retrieve_from_database(byte_sequence)
         print(f"[INFO] Retrieved retrieval information: {retrieval_info}")
 
-        # Step 3: Save retrieval information to a file
+        # Step 3: Save retrieval information and file extension to a file
         with open("retrieval_info.json", "w") as f:
-            json.dump(retrieval_info, f)
-        print("[INFO] Retrieval information saved to retrieval_info.json")
+            json.dump({
+                "retrieval_info": retrieval_info,
+                "file_extension": file_extension,  # Store the file extension explicitly
+                "is_file": file_path is not None  # Indicate whether the secret is a file or a message
+            }, f)
+        print("[INFO] Retrieval information and metadata saved to retrieval_info.json")
 
         # Step 4: Simulate sending the retrieval information and carrier videos
         print(f"[INFO] Transmitting retrieval information and carrier videos...")
@@ -104,16 +121,16 @@ if __name__ == "__main__":
     # Prompt user for input type
     while True:
         try:
-            option = int(input("Choose an option:\n1. Message\n2. Message in a text file\nEnter your choice (1 or 2): ").strip())
+            option = int(input("Choose an option:\n1. Message\n2. File\nEnter your choice (1 or 2): ").strip())
             if option == 1:
                 secret_info = input("Enter the secret message: ").strip()
                 binary_secret_info = transmitter.text_to_binary(secret_info)
+                retrieval_info = transmitter.transmit_secret_info(binary_secret_info)
                 break
             elif option == 2:
-                file_path = input("Enter the path to the text file: ").strip()
+                file_path = input("Enter the path to the file: ").strip()
                 if os.path.exists(file_path):
-                    secret_info = transmitter.read_text_file(file_path)
-                    binary_secret_info = transmitter.text_to_binary(secret_info)
+                    retrieval_info = transmitter.transmit_secret_info(None, file_path)
                     break
                 else:
                     print("[ERROR] File not found. Please try again.")
@@ -122,6 +139,4 @@ if __name__ == "__main__":
         except ValueError:
             print("[ERROR] Please enter a valid number.")
 
-    # Transmit the secret information
-    retrieval_info = transmitter.transmit_secret_info(binary_secret_info)
     print("[INFO] Transmission complete.")
