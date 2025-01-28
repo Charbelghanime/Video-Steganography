@@ -50,24 +50,6 @@ class VideoProcessor:
         audio, sr = librosa.load(video_path, sr=None)
         return audio, sr
 
-    def delete_files(self, file_paths):
-        """Delete files from the provided list."""
-        for file_path in file_paths:
-            if os.path.exists(file_path):  # Check if the file exists
-                os.remove(file_path)  # Delete the file
-                print(f"[INFO] Deleted file: {file_path}")
-
-    def delete_directory(self, directory_path):
-        """Delete the directory and its contents."""
-        if os.path.exists(directory_path):  # Check if the directory exists
-            for root, dirs, files in os.walk(directory_path, topdown=False):  # Walk through the directory
-                for file in files:
-                    os.remove(os.path.join(root, file))  # Delete files
-                for dir in dirs:
-                    os.rmdir(os.path.join(root, dir))  # Delete subdirectories
-            os.rmdir(directory_path)  # Delete the main directory
-            print(f"[INFO] Deleted directory: {directory_path}")
-
     def create_database(self):
         """Create the SQLite database if it doesn't exist."""
         if not os.path.exists(self.db_path):
@@ -114,31 +96,6 @@ class VideoProcessor:
         """, batch)
         conn.commit()
         conn.close()
-    
-    def insert_into_database(self, byte_sequence, video_id, feature_id, position_id):
-        """
-        Insert a unique entry into the RetrievalDatabase. If an entry with the same
-        ByteSequence, VideoID, FeatureID, and PositionID already exists, it skips insertion.
-        Also keep track of the variable related to the unique hash sequences generated in the database.
-        """
-        conn = sqlite3.connect(self.db_path)  # Connect to the database
-        cursor = conn.cursor()
-        cursor.execute("PRAGMA synchronous = OFF")
-        cursor.execute("PRAGMA journal_mode = MEMORY")
-
-        # Check for duplicate entry
-        cursor.execute("""
-            SELECT COUNT(*) FROM RetrievalDatabase 
-            WHERE ByteSequence = ? AND VideoID = ? AND FeatureID = ? AND PositionID = ?
-        """, (byte_sequence, video_id, feature_id, position_id))
-
-        if cursor.fetchone()[0] == 0:  # Proceed if no duplicate entry exists
-            cursor.execute("""
-                INSERT INTO RetrievalDatabase (ByteSequence, VideoID, FeatureID, PositionID)
-                VALUES (?, ?, ?, ?)
-            """, (byte_sequence, video_id, feature_id, position_id))  # Insert the entry
-            conn.commit()  # Commit the changes
-        conn.close()  # Close the connection
 
     def check_database_integrity(self):
         """Check if the database contains any empty or null entries."""
@@ -286,11 +243,6 @@ class VideoProcessor:
 
         return final_sequences
 
-    def update_retrieval_database(self, video_id, feature_id, position_id, hash_sequence):
-        """Update the retrieval database with a new hash sequence."""
-        byte_sequence = ''.join(map(str, hash_sequence))  # Convert hash sequence to string
-        self.insert_into_database(byte_sequence, video_id, feature_id, position_id)  # Insert into the database
-
     def get_row_count(self):
         """Get the current number of rows in the database."""
         conn = sqlite3.connect(self.db_path)  # Connect to the database
@@ -301,6 +253,7 @@ class VideoProcessor:
         row_count = cursor.fetchone()[0]
         conn.close()  # Close the connection
         return row_count
+    
     def count_unique_hash_sequences(self):
         """
         Count the number of unique hash sequences in the database.
@@ -328,22 +281,29 @@ class VideoProcessor:
         batch = []
         BATCH_SIZE = 1000  # Adjust based on memory constraints
 
-        # Load progress if it exists
-        if os.path.exists(self.progress_file):
-            progress = self.load_progress()
+        progress = self.load_progress()
+        if progress:
+            video_index = progress.get("video_index", 0)
+            frame_index = progress.get("frame_index", 0)
+            feature_stage = progress.get("feature_stage", "SIFT")
+            audio_progress = progress.get("audio_progress", {})
         else:
-            progress = {"video_index": 0, "frame_index": 0, "feature_stage": "SIFT"}
-        video_index = progress["video_index"]
-        frame_index = progress["frame_index"]
-        feature_stage = progress["feature_stage"]
+            video_index = 0
+            frame_index = 0
+            feature_stage = "SIFT"
+            audio_progress = {}
 
         carrier_videos = []  # To track processed videos
         video_files = [os.path.join(self.videos_dir, f) for f in os.listdir(self.videos_dir) if f.endswith(".mp4")]  # List all video files
 
         def handle_interrupt(signal, frame):
-            """Handle keyboard interrupts by saving progress and cleaning up."""
             print("\n[INFO] KeyboardInterrupt detected. Saving progress ....")
-            self.save_progress({"video_index": video_index, "frame_index": frame_index, "feature_stage": feature_stage})
+            self.save_progress({
+                "video_index": video_index,
+                "frame_index": frame_index,
+                "feature_stage": feature_stage,
+                "audio_progress": audio_progress
+            })
             exit(1)
 
         signal.signal(signal.SIGINT, handle_interrupt)  # Set up the interrupt handler
@@ -357,7 +317,7 @@ class VideoProcessor:
             print(f"[INFO] Starting round {round} of processing...")
 
             # Process each video file
-            for i, video_path in enumerate(video_files):
+            for i, video_path in enumerate(video_files[video_index:], start=video_index):
                 unique_hash_count = self.count_unique_hash_sequences()
                 if unique_hash_count >= 256:  # Check if all 256 unique hash sequences have been generated
                     print("[INFO] All 256 unique hash sequences have been generated. Terminating early.")
@@ -375,7 +335,7 @@ class VideoProcessor:
                     sift_start_time = time.time()
 
                     # Step 4-6: Process each frame to generate SIFT hash
-                    print("[INFO] Hash sequence generation from SIFT features has started")
+                    print("[INFO] Hash sequence generation from SIFT features for Video " + video_id + "has started")
                     for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
                         hash_sift_list = self.generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
 
@@ -386,75 +346,109 @@ class VideoProcessor:
                             batch = []
 
                         # Save progress
-                        self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
+                        self.save_progress({
+                            "video_index": i,
+                            "frame_index": j + 1,
+                            "feature_stage": "SIFT",
+                            "audio_progress": audio_progress
+                        })
                         frame_index = j + 1  # Save frame index locally in order to save progress upon keyboard interrupt
 
                     sift_end_time = time.time()
-                    print("[INFO] Hash sequence generation from SIFT features is complete")
                     print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
-
+                    print("[INFO] Hash sequence generation from SIFT features from Video " + video_id + "is complete")
                     # Save progress
-                    self.save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
-                    # Move to next stage
                     feature_stage = "STE"
                     frame_index = 0
-
-                
+                    self.save_progress({
+                        "video_index": i,
+                        "frame_index": 0,
+                        "feature_stage": "STE",
+                        "audio_progress": audio_progress
+                    })
 
                 if feature_stage == "STE":
+                    if f"video_{video_id}_ste" not in audio_progress:
                     # Time the process of hash generation based on STE
-                    ste_start_time = time.time()
+                        ste_start_time = time.time()
 
-                    # Step 9-11: Short-term energy hash
-                    print("[INFO] Hash sequence generation from STE features has started")
-                    energy_frames = self.calculate_short_term_energy(audio)
-                    segmented_energy = self.calculate_segmented_energy(energy_frames)
-                    hash_ste_list = self.generate_ste_hash(segmented_energy)
-                    print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
-                    for j in range(0, len(hash_ste_list), 2):
-                        # Direct STE hash sequence
-                        batch.append((hash_ste_list[j], video_id, "10", j // 2))
-                        batch.append((hash_ste_list[j + 1], video_id, "11", j // 2))
-                        if len(batch) >= BATCH_SIZE:
-                            self.insert_batch_into_database(batch)
-                            batch = []
+                        # Step 9-11: Short-term energy hash
+                        print("[INFO] Hash sequence generation from STE features for Video " + video_id + "has started")
+                        audio_progress[f"video_{video_id}_ste"] = "started"
+                        self.save_progress({
+                            "video_index": i,
+                            "frame_index": 0,
+                            "feature_stage": "STE",
+                            "audio_progress": audio_progress
+                        })
+
+                        energy_frames = self.calculate_short_term_energy(audio)
+                        segmented_energy = self.calculate_segmented_energy(energy_frames)
+                        hash_ste_list = self.generate_ste_hash(segmented_energy)
+                        print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
+                        for j in range(0, len(hash_ste_list), 2):
+                            # Direct STE hash sequence
+                            batch.append((hash_ste_list[j], video_id, "10", j // 2))
+                            batch.append((hash_ste_list[j + 1], video_id, "11", j // 2))
+                            if len(batch) >= BATCH_SIZE:
+                                self.insert_batch_into_database(batch)
+                                batch = []
 
                         # Save progress
-                        self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
+                        # Mark STE hash generation as complete
+                        audio_progress[f"video_{video_id}_ste"] = "complete"
+                        self.save_progress({
+                            "video_index": i,
+                            "frame_index": 0,
+                            "feature_stage": "DWT",
+                            "audio_progress": audio_progress
+                        })
 
-                    ste_end_time = time.time()
-                    print("[INFO] Hash sequence generation from STE features is complete")
-                    print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
-
-                    # Save progress
-                    self.save_progress({"video_index": i, "frame_index": 0, "feature_stage": "DWT"})
+                        ste_end_time = time.time()
+                        print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
+                    print("[INFO] Hash sequence generation from STE features for Video " + video_id + "is complete")
+                    
                     # Move to next stage
                     feature_stage = "DWT"
 
                 if feature_stage == "DWT":
-                    # Time the process of hash generation based on DWT coefficients
-                    dwt_start_time = time.time()
+                    if f"video_{video_id}_dwt" not in audio_progress:
+                        # Time the process of hash generation based on DWT coefficients
+                        dwt_start_time = time.time()
 
-                    # Step 13-15: DWT hash
-                    print("[INFO] Hash sequence generation from DWT features has started")
-                    dwt_hash_sequences = self.calculate_dwt_hash(audio)
-                    print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
-                    for j in range(0, len(dwt_hash_sequences), 2):
-                        # Direct STE hash sequence
-                        batch.append((dwt_hash_sequences[j], video_id, "20", j // 2))
-                        batch.append((dwt_hash_sequences[j + 1], video_id, "21", j // 2))
-                        if len(batch) >= BATCH_SIZE:
-                            self.insert_batch_into_database(batch)
-                            batch = []
+                        audio_progress[f"video_{video_id}_dwt"] = "started"
+                        self.save_progress({
+                            "video_index": i,
+                            "frame_index": 0,
+                            "feature_stage": "DWT",
+                            "audio_progress": audio_progress
+                        })
+
+                        # Step 13-15: DWT hash
+                        print("[INFO] Hash sequence generation from DWT features for Video " + video_id + "has started")
+                        dwt_hash_sequences = self.calculate_dwt_hash(audio)
+                        print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
+                        for j in range(0, len(dwt_hash_sequences), 2):
+                            # Direct STE hash sequence
+                            batch.append((dwt_hash_sequences[j], video_id, "20", j // 2))
+                            batch.append((dwt_hash_sequences[j + 1], video_id, "21", j // 2))
+                            if len(batch) >= BATCH_SIZE:
+                                self.insert_batch_into_database(batch)
+                                batch = []
                         # Save progress
-                        self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
+                        audio_progress[f"video_{video_id}_dwt"] = "complete"
+                        self.save_progress({
+                            "video_index": i + 1,
+                            "frame_index": 0,
+                            "feature_stage": "SIFT",
+                            "audio_progress": audio_progress
+                        })
 
-                    dwt_end_time = time.time()
-                    print("[INFO] Hash sequence generation from DWT features is complete")
-                    print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
+                        dwt_end_time = time.time()
+                        print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
 
-                    # Save progress
-                    self.save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
+                    print("[INFO] Hash sequence generation from DWT features for Video " + video_id +  "is complete")
+                    
                     # Move to next video
                     feature_stage = "SIFT"
                     video_index += 1
