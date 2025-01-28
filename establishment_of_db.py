@@ -30,11 +30,6 @@ class VideoProcessor:
                 return json.load(f)
         return None
 
-    def reset_progress(self):
-        """Reset progress by deleting the progress file."""
-        if os.path.exists(self.progress_file):
-            os.remove(self.progress_file)
-
     def extract_frames(self, video_path):
         cap = cv2.VideoCapture(video_path)
         frames = []
@@ -321,6 +316,7 @@ class VideoProcessor:
                 unique_hash_count = self.count_unique_hash_sequences()
                 if unique_hash_count >= 256:  # Check if all 256 unique hash sequences have been generated
                     print("[INFO] All 256 unique hash sequences have been generated. Terminating early.")
+                    os.remove(self.progress_file)  # Remove the progress file
                     terminate = True
                     break  # Break out of the for loop
 
