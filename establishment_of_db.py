@@ -15,8 +15,8 @@ class VideoProcessor:
         self.db_path = db_path  # Path to the SQLite database
         self.progress_file = progress_file  # Path to the progress file
         self.unique_hash_count = [0]  # Use a mutable list to track the number of unique hash sequences
-        self.output_dir = "Processed"  # Directory to store processed files
-        os.makedirs(self.output_dir, exist_ok=True)  # Create the output directory if it doesn't exist
+        self.sift = cv2.SIFT_create()
+        
 
     def save_progress(self, progress):
         """Save progress to a JSON file."""
@@ -36,38 +36,19 @@ class VideoProcessor:
             os.remove(self.progress_file)
 
     def extract_frames(self, video_path):
-        """Extract frames from a video and save them as images."""
-        cap = cv2.VideoCapture(video_path)  # Open the video file
-        frames = []  # List to store the paths of extracted frames
-        video_name = os.path.splitext(os.path.basename(video_path))[0]  # Get the name of the video file without extension
-        frame_dir = os.path.join(self.output_dir, f"frames_{video_name}")  # Directory to save the extracted frames
-        os.makedirs(frame_dir, exist_ok=True)  # Create the directory if it doesn't exist
-
-        count = 0  # Frame counter
-        while cap.isOpened():  # Loop through the video frames
-            ret, frame = cap.read()  # Read the next frame
-            if not ret:  # If no more frames, break the loop
+        cap = cv2.VideoCapture(video_path)
+        frames = []
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
                 break
-
-            frame_path = os.path.join(frame_dir, f"frame_{count}.jpg")  # Save the current frame as an image file
-            cv2.imwrite(frame_path, frame)
-            frames.append(frame_path)  # Add frame path to the list
-            count += 1  # Increment frame counter
-
-        cap.release()  # Release the video capture object
-        print(f"[INFO] Frames extracted and saved to {frame_dir}")
-        return frames, frame_dir
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))  # Convert to grayscale once
+        cap.release()
+        return frames
 
     def extract_audio(self, video_path):
-        """Extract audio from a video and save it as a WAV file."""
-        audio_path = f"{os.path.splitext(video_path)[0]}.wav"  # Define the output audio file path
-        if not os.path.exists(audio_path):  # Check if the audio file already exists
-            os.system(f"ffmpeg -i {video_path} -q:a 0 -map a {audio_path} -y")  # Use FFmpeg to extract audio
-            print(f"[INFO] Audio extracted and saved as {audio_path}")
-        else:
-            print(f"[INFO] Audio already exists at {audio_path}")
-        audio, sr = librosa.load(audio_path, sr=None)  # Load the audio using librosa
-        return audio, audio_path
+        audio, sr = librosa.load(video_path, sr=None)
+        return audio, sr
 
     def delete_files(self, file_paths):
         """Delete files from the provided list."""
@@ -89,24 +70,51 @@ class VideoProcessor:
 
     def create_database(self):
         """Create the SQLite database if it doesn't exist."""
-        if not os.path.exists(self.db_path):  # Check if the database already exists
-            conn = sqlite3.connect(self.db_path)  # Connect to the database
+        if not os.path.exists(self.db_path):
+            print(f"[INFO] Creating new database at {self.db_path}")
+            conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
+            cursor.execute("PRAGMA synchronous = OFF")
+            cursor.execute("PRAGMA journal_mode = MEMORY")
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS RetrievalDatabase (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     ByteSequence TEXT NOT NULL,
                     VideoID INTEGER NOT NULL,
                     FeatureID TEXT NOT NULL,
-                    PositionID INTEGER NOT NULL
+                    PositionID INTEGER NOT NULL,
+                    UNIQUE(ByteSequence, VideoID, FeatureID, PositionID)
                 )
-            """)  # Create the table
-            conn.commit()  # Commit the changes
-            conn.close()  # Close the connection
-            print(f"[INFO] SQLite database created at {self.db_path}")
+            """)
+            conn.commit()
+            conn.close()
+            print(f"[INFO] SQLite database and table created at {self.db_path}")
         else:
             print(f"[INFO] Database already exists at {self.db_path}")
+            # Verify if the table exists
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='RetrievalDatabase'")
+            table_exists = cursor.fetchone()
+            conn.close()
+            if not table_exists:
+                print("[WARNING] Table 'RetrievalDatabase' does not exist. Deleting and recreating the database.")
+                os.remove(self.db_path)
+                self.create_database()  # Recursively recreate the database
 
+    def insert_batch_into_database(self, batch):
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA synchronous = OFF")
+        cursor.execute("PRAGMA journal_mode = MEMORY")
+        cursor.executemany("""
+            INSERT OR IGNORE INTO RetrievalDatabase 
+            (ByteSequence, VideoID, FeatureID, PositionID)
+            VALUES (?, ?, ?, ?)
+        """, batch)
+        conn.commit()
+        conn.close()
+    
     def insert_into_database(self, byte_sequence, video_id, feature_id, position_id):
         """
         Insert a unique entry into the RetrievalDatabase. If an entry with the same
@@ -115,13 +123,8 @@ class VideoProcessor:
         """
         conn = sqlite3.connect(self.db_path)  # Connect to the database
         cursor = conn.cursor()
-
-        # Check if the byte sequence is unique
-        cursor.execute("""
-            SELECT COUNT(*) FROM RetrievalDatabase WHERE ByteSequence = ?
-        """, (byte_sequence,))
-        if cursor.fetchone()[0] == 0:  # If the byte sequence is unique, increment the counter
-            self.unique_hash_count[0] += 1
+        cursor.execute("PRAGMA synchronous = OFF")
+        cursor.execute("PRAGMA journal_mode = MEMORY")
 
         # Check for duplicate entry
         cursor.execute("""
@@ -141,23 +144,23 @@ class VideoProcessor:
         """Check if the database contains any empty or null entries."""
         conn = sqlite3.connect(self.db_path)  # Connect to the database
         cursor = conn.cursor()
+        cursor.execute("PRAGMA synchronous = OFF")
+        cursor.execute("PRAGMA journal_mode = MEMORY")
         cursor.execute("SELECT COUNT(*) FROM RetrievalDatabase WHERE ByteSequence IS NULL OR ByteSequence = ''")
         null_count = cursor.fetchone()[0]  # Count the number of null or empty entries
         conn.close()  # Close the connection
         return null_count == 0  # Return True if no null or empty entries exist
 
-    def generate_sift_hash(self, frame_path):
+    def generate_sift_hash(self, frame):
         """
         Generate SIFT-based hash for a frame based on the paper's implementation.
         """
         # Step 1: Process the frame image
-        frame = cv2.imread(frame_path, cv2.IMREAD_GRAYSCALE)  # Convert to grayscale
         resized_frame = cv2.resize(frame, (512, 512))  # Uniform size to 512x512
         block_size = 512 // 3  # Divide into 3x3 blocks
 
         # Step 2: Divide the frame into 3x3 blocks and count SIFT feature points
-        sift = cv2.SIFT_create()  # Create a SIFT object
-        keypoints, _ = sift.detectAndCompute(resized_frame, None)  # Detect keypoints
+        keypoints, _ = self.sift.detectAndCompute(resized_frame, None)  # Detect keypoints
 
         # Initialize a list to count SIFT points for each block
         sift_counts = [0] * 9
@@ -195,12 +198,9 @@ class VideoProcessor:
     def calculate_short_term_energy(self, audio_signal, frame_length=200, frame_shift=80):
         """Divide the audio signal into frames and calculate short-term energy."""
         num_frames = (len(audio_signal) - frame_length) // frame_shift + 1
-        energy_frames = []
-        for i in range(num_frames):
-            frame = audio_signal[i * frame_shift: i * frame_shift + frame_length]
-            energy = np.sum(frame ** 2)  # Calculate energy for the frame
-            energy_frames.append(energy)
-        return energy_frames
+        indices = np.arange(frame_length)[None, :] + frame_shift * np.arange(num_frames)[:, None]
+        frames = audio_signal[indices]
+        return np.sum(frames ** 2, axis=1)
 
     def calculate_segmented_energy(self, energy_frames, L0=180):
         """Calculate segmented energy from the energy frames."""
@@ -295,11 +295,29 @@ class VideoProcessor:
         """Get the current number of rows in the database."""
         conn = sqlite3.connect(self.db_path)  # Connect to the database
         cursor = conn.cursor()
+        cursor.execute("PRAGMA synchronous = OFF")
+        cursor.execute("PRAGMA journal_mode = MEMORY")
         cursor.execute("SELECT COUNT(*) FROM RetrievalDatabase")  # Count rows
         row_count = cursor.fetchone()[0]
         conn.close()  # Close the connection
         return row_count
+    def count_unique_hash_sequences(self):
+        """
+        Count the number of unique hash sequences in the database.
 
+        Returns:
+            int: Number of unique hash sequences.
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # SQL query to count distinct ByteSequence
+        cursor.execute("SELECT COUNT(DISTINCT ByteSequence) FROM RetrievalDatabase")
+        unique_count = cursor.fetchone()[0]
+        
+        conn.close()
+        return unique_count
+    
     def video_retrieval_database_construction(self):
         """Construct the retrieval database by processing videos."""
         start_time = time.time()  # Start time
@@ -307,6 +325,8 @@ class VideoProcessor:
         no_change_counter = 0  # Counter to track consecutive rounds with no new entries
         max_rounds_without_change = 2  # Maximum allowed rounds without database entry changes
         self.create_database()  # Create the database if it doesn't exist
+        batch = []
+        BATCH_SIZE = 1000  # Adjust based on memory constraints
 
         # Load progress if it exists
         if os.path.exists(self.progress_file):
@@ -324,13 +344,13 @@ class VideoProcessor:
             """Handle keyboard interrupts by saving progress and cleaning up."""
             print("\n[INFO] KeyboardInterrupt detected. Saving progress ....")
             self.save_progress({"video_index": video_index, "frame_index": frame_index, "feature_stage": feature_stage})
-            self.delete_directory("Processed")
             exit(1)
 
         signal.signal(signal.SIGINT, handle_interrupt)  # Set up the interrupt handler
 
         previous_row_count = self.get_row_count()  # Get the initial row count
-        while self.unique_hash_count[0] < 256:  # Check if unique hash sequences generated are less than 256
+        
+        while True:  # Check if unique hash sequences generated are less than 256
             round_start_time = time.time()  # Time the round
             terminate = False  # Flag to terminate the while loop
             round += 1
@@ -338,7 +358,8 @@ class VideoProcessor:
 
             # Process each video file
             for i, video_path in enumerate(video_files):
-                if self.unique_hash_count[0] >= 256:  # Check if all 256 unique hash sequences have been generated
+                unique_hash_count = self.count_unique_hash_sequences()
+                if unique_hash_count >= 256:  # Check if all 256 unique hash sequences have been generated
                     print("[INFO] All 256 unique hash sequences have been generated. Terminating early.")
                     terminate = True
                     break  # Break out of the for loop
@@ -346,7 +367,8 @@ class VideoProcessor:
                 video_id = i + 1  # Assign a unique ID to the video
 
                 # Step 3: Extract frame images
-                frames, frame_dir = self.extract_frames(video_path)
+                frames = self.extract_frames(video_path)
+                audio, _ = self.extract_audio(video_path)
 
                 if feature_stage == "SIFT":
                     # Time the process of hash generation based on SIFT
@@ -357,13 +379,11 @@ class VideoProcessor:
                     for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
                         hash_sift_list = self.generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
 
-                        # Insert the original hash sequence into the database with FeatureID=0 and append '0'
-                        original_feature_id = "00"  # Direct mapping
-                        self.update_retrieval_database(video_id, original_feature_id, j, hash_sift_list[0])
-
-                        # Insert the inverted hash sequence into the database with FeatureID=0 and append '1'
-                        inverted_feature_id = "01"  # Indirect mapping
-                        self.update_retrieval_database(video_id, inverted_feature_id, j, hash_sift_list[1])
+                        batch.append((hash_sift_list[0], video_id, "00", j))
+                        batch.append((hash_sift_list[1], video_id, "01", j))
+                        if len(batch) >= BATCH_SIZE:
+                            self.insert_batch_into_database(batch)
+                            batch = []
 
                         # Save progress
                         self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "SIFT"})
@@ -377,9 +397,9 @@ class VideoProcessor:
                     self.save_progress({"video_index": i, "frame_index": 0, "feature_stage": "STE"})
                     # Move to next stage
                     feature_stage = "STE"
+                    frame_index = 0
 
-                # Step 8: Extract audio
-                audio, audio_path = self.extract_audio(video_path)
+                
 
                 if feature_stage == "STE":
                     # Time the process of hash generation based on STE
@@ -393,12 +413,11 @@ class VideoProcessor:
                     print(f"[DEBUG] Generated STE hash sequences: {hash_ste_list}")  # Debug to verify the hash
                     for j in range(0, len(hash_ste_list), 2):
                         # Direct STE hash sequence
-                        direct_feature_id = "10"  # FeatureID for direct mapping
-                        self.update_retrieval_database(video_id, direct_feature_id, j // 2, hash_ste_list[j])
-
-                        # Inverted STE hash sequence
-                        inverted_feature_id = "11"  # FeatureID for inverted mapping
-                        self.update_retrieval_database(video_id, inverted_feature_id, j // 2, hash_ste_list[j + 1])
+                        batch.append((hash_ste_list[j], video_id, "10", j // 2))
+                        batch.append((hash_ste_list[j + 1], video_id, "11", j // 2))
+                        if len(batch) >= BATCH_SIZE:
+                            self.insert_batch_into_database(batch)
+                            batch = []
 
                         # Save progress
                         self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "STE"})
@@ -422,13 +441,11 @@ class VideoProcessor:
                     print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
                     for j in range(0, len(dwt_hash_sequences), 2):
                         # Direct STE hash sequence
-                        direct_feature_id = "20"  # FeatureID for direct mapping
-                        self.update_retrieval_database(video_id, direct_feature_id, j // 2, dwt_hash_sequences[j])
-
-                        # Inverted STE hash sequence
-                        inverted_feature_id = "21"  # FeatureID for inverted mapping
-                        self.update_retrieval_database(video_id, inverted_feature_id, j // 2, dwt_hash_sequences[j + 1])
-
+                        batch.append((dwt_hash_sequences[j], video_id, "20", j // 2))
+                        batch.append((dwt_hash_sequences[j + 1], video_id, "21", j // 2))
+                        if len(batch) >= BATCH_SIZE:
+                            self.insert_batch_into_database(batch)
+                            batch = []
                         # Save progress
                         self.save_progress({"video_index": i, "frame_index": j + 1, "feature_stage": "DWT"})
 
@@ -440,12 +457,16 @@ class VideoProcessor:
                     self.save_progress({"video_index": i + 1, "frame_index": 0, "feature_stage": "SIFT"})
                     # Move to next video
                     feature_stage = "SIFT"
+                    video_index += 1
 
                 # Step 17: Append to carrier videos
                 if video_path not in carrier_videos:  # Check if the video is already in the carrier videos folder
                     carrier_videos.append(video_path)
                     print(f"[INFO] Video {video_path} processed")
 
+            if batch:  # Insert remaining entries
+                self.insert_batch_into_database(batch)
+                
             # Check for changes in database row count
             current_row_count = self.get_row_count()
             if current_row_count == previous_row_count:
@@ -475,8 +496,6 @@ class VideoProcessor:
             print("[INFO] Retrieval database successfully constructed and verified to be non-empty.")
         else:
             print("[WARNING] Retrieval database contains empty or null entries.")
-
-        self.delete_directory("Processed")  # Clean up processed files
 
         # Step 21: Return the constructed retrieval database and carrier videos
         return self.db_path, carrier_videos
