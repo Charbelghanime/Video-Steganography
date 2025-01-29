@@ -331,7 +331,8 @@ class VideoProcessor:
                     sift_start_time = time.time()
 
                     # Step 4-6: Process each frame to generate SIFT hash
-                    print("[INFO] Hash sequence generation from SIFT features for Video " + video_id + "has started")
+                    print(f"[INFO] Hash sequence generation from SIFT features for Video {video_id} has started")
+
                     for j, frame_path in enumerate(frames[frame_index:], start=frame_index):  # Start from frame_index
                         hash_sift_list = self.generate_sift_hash(frame_path)  # Returns [hash_sequence, inverted_sequence]
 
@@ -352,7 +353,8 @@ class VideoProcessor:
 
                     sift_end_time = time.time()
                     print(f"[INFO] SIFT hash sequence generation took and mapping {sift_end_time - sift_start_time:.2f} seconds")
-                    print("[INFO] Hash sequence generation from SIFT features from Video " + video_id + "is complete")
+                    print(f"[INFO] Hash sequence generation from SIFT features for Video {video_id} is complete")
+
                     # Save progress
                     feature_stage = "STE"
                     frame_index = 0
@@ -369,7 +371,8 @@ class VideoProcessor:
                         ste_start_time = time.time()
 
                         # Step 9-11: Short-term energy hash
-                        print("[INFO] Hash sequence generation from STE features for Video " + video_id + "has started")
+                        print(f"[INFO] Hash sequence generation from STE features for Video {video_id} has started")
+
                         audio_progress[f"video_{video_id}_ste"] = "started"
                         self.save_progress({
                             "video_index": i,
@@ -402,7 +405,8 @@ class VideoProcessor:
 
                         ste_end_time = time.time()
                         print(f"[INFO] STE hash sequence generation and mapping took {ste_end_time - ste_start_time:.2f} seconds")
-                    print("[INFO] Hash sequence generation from STE features for Video " + video_id + "is complete")
+                    print(f"[INFO] Hash sequence generation from STE features for Video {video_id} is complete")
+
                     
                     # Move to next stage
                     feature_stage = "DWT"
@@ -421,7 +425,7 @@ class VideoProcessor:
                         })
 
                         # Step 13-15: DWT hash
-                        print("[INFO] Hash sequence generation from DWT features for Video " + video_id + "has started")
+                        print(f"[INFO] Hash sequence generation from DWT features for Video {video_id} has started")
                         dwt_hash_sequences = self.calculate_dwt_hash(audio)
                         print(f"[DEBUG] Generated DWT hash sequences: {dwt_hash_sequences}")  # Debug to verify the hash
                         for j in range(0, len(dwt_hash_sequences), 2):
@@ -443,7 +447,8 @@ class VideoProcessor:
                         dwt_end_time = time.time()
                         print(f"[INFO] DWT hash sequence generation and mapping took {dwt_end_time - dwt_start_time:.2f} seconds")
 
-                    print("[INFO] Hash sequence generation from DWT features for Video " + video_id +  "is complete")
+                    print(f"[INFO] Hash sequence generation from DWT features for Video {video_id} is complete")
+
                     
                     # Move to next video
                     feature_stage = "SIFT"
